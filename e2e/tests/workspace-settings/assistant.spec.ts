@@ -2,7 +2,7 @@ import { DEFAULT_LEVELS, TOP_LEVELS } from "@ember/protocol/assistant";
 import type { APIRequestContext, Locator, Page } from "@playwright/test";
 import { administratorSession, cookieHeader, drawnPicture, editorField, expect, SAME_ORIGIN, shownPicture, signInAsAdministrator, test, useOwnAddress } from "../../fixtures";
 import { AI_GATEWAY_ACCOUNT } from "../../projects/workspace-settings";
-import { ANTHROPIC_PATH, FOUND, GEMMA, HELLO, NEWER, SOURCE, startFakeGateway, type FakeGateway } from "./fake-gateway";
+import { ANTHROPIC_PATH, FOUND, GEMMA, HELLO, NEWER, RECALL_QUESTION, RECALLED, SOURCE, startFakeGateway, type FakeGateway } from "./fake-gateway";
 
 // The AI assistant tab's Ember AI card and Set up Ember AI, @ember's page, with Add a model, and @ember
 // answering, on the second test server, which asks models through the AI Gateway this spec fakes. Each test leaves the workspace as a new one is: Ember AI off, its dials
@@ -48,6 +48,9 @@ async function openEmber(page: Page) {
 
 /** @ember's row in the AI assistant tab's Agents card. */
 const emberRow = (page: Page) => page.getByRole("region", { name: "Agents", exact: true }).getByRole("listitem").filter({ hasText: "Built in" });
+
+/** How many of a room's latest messages @ember reads with a question asked there, the question among them (apps/worker/src/assistant/answers.ts). */
+const ROOM_MESSAGES_READ = 20;
 
 /** The model Ember suggests, which the tests set Ember AI up with, and what Anthropic's endpoint calls it. */
 const HAIKU = { id: "anthropic/claude-haiku-5.5", there: "claude-haiku-5-5" };
@@ -155,18 +158,18 @@ test.describe("Ember AI", () => {
     await expect(card).toContainText("Ember's agents answer through Cloudflare AI Gateway, each on the model you choose for it.");
     await expect(card.getByRole("switch", { name: "Ember AI" })).toBeChecked();
     // The Agents card lists @ember, on the model chosen, with a link to its page.
-    await expect(emberRow(page)).toContainText("EmberBuilt inAnswers anything people ask.Claude Haiku 5.5 · Every open room");
+    await expect(emberRow(page)).toContainText("EmberBuilt inAnswers anything people ask.Claude Haiku 5.5 · Every room");
     await expect(emberRow(page).getByRole("link", { name: "Edit Ember" })).toHaveAttribute("href", "/account/agents/ember/edit");
 
     // Ember keeps it.
     await page.reload();
-    await expect(emberRow(page)).toContainText("Claude Haiku 5.5 · Every open room");
+    await expect(emberRow(page)).toContainText("Claude Haiku 5.5 · Every room");
   });
 
   test("the administrator changes the model, keeping the API token, which Ember asks through its provider's endpoint", async ({ page, request }) => {
     await setUpAssistant(request, "openai/gpt-6.1-sol");
     const card = await openAssistant(page);
-    await expect(emberRow(page)).toContainText("GPT-6.1 Sol · Every open room");
+    await expect(emberRow(page)).toContainText("GPT-6.1 Sol · Every room");
     await card.getByRole("button", { name: "Change" }).click();
 
     const setup = page.getByRole("dialog");
@@ -184,7 +187,7 @@ test.describe("Ember AI", () => {
       body: { model: "claude-sonnet-5-5", max_tokens: expect.any(Number) as unknown },
     });
     await setup.getByRole("button", { name: "Done" }).click();
-    await expect(emberRow(page)).toContainText("Claude Sonnet 5.5 · Every open room");
+    await expect(emberRow(page)).toContainText("Claude Sonnet 5.5 · Every room");
   });
 
   test("the administrator chooses one of Workers AI's models, which Cloudflare runs, and Ember asks it through Cloudflare's REST API", async ({ page, request }) => {
@@ -214,7 +217,7 @@ test.describe("Ember AI", () => {
       body: { model: GEMMA.id },
     });
     await setup.getByRole("button", { name: "Done" }).click();
-    await expect(emberRow(page)).toContainText(`${GEMMA.name} · Every open room`);
+    await expect(emberRow(page)).toContainText(`${GEMMA.name} · Every room`);
   });
 
   test("the administrator lets @ember search the web on one of Workers AI's models, with Ember's own tool on Cloudflare's Web Search API", async ({ page, request }) => {
@@ -237,7 +240,7 @@ test.describe("Ember AI", () => {
     );
 
     await page.getByRole("link", { name: "Go Back" }).click();
-    await expect(emberRow(page)).toContainText(`${GEMMA.name} · Searches the web · Every open room`);
+    await expect(emberRow(page)).toContainText(`${GEMMA.name} · Searches the web · Every room`);
   });
 
   test("the administrator lets @ember search the web once its model has searched for a test question", async ({ page, request }) => {
@@ -264,7 +267,7 @@ test.describe("Ember AI", () => {
     await page.reload();
     await expect(page.getByRole("region", { name: "@ember", exact: true }).getByRole("switch", { name: "Search the web" })).toBeChecked();
     await page.getByRole("link", { name: "Go Back" }).click();
-    await expect(emberRow(page)).toContainText("Claude Sonnet 5.5 · Searches the web · Every open room");
+    await expect(emberRow(page)).toContainText("Claude Sonnet 5.5 · Searches the web · Every room");
   });
 
   test("the administrator lets people pick another model, which someone picks on their profile, and @ember answers them with it", async ({ page, request }) => {
@@ -289,7 +292,7 @@ test.describe("Ember AI", () => {
     await expect(models.getByRole("radio", { name: "Claude Haiku 5.5" })).toBeChecked();
     await expect(models.getByRole("radio", { name: "Claude Sonnet 5.5" })).not.toBeChecked();
     await page.getByRole("link", { name: "Go Back" }).click();
-    await expect(emberRow(page)).toContainText("Claude Haiku 5.5, or the model each person picks · Every open room");
+    await expect(emberRow(page)).toContainText("Claude Haiku 5.5, or the model each person picks · Every room");
 
     // On their profile, they pick it, which Ember keeps.
     await page.goto("/users/me/profile");
@@ -468,6 +471,52 @@ test.describe("@ember", () => {
     await expect(answer).not.toContainText("I'll look that up.");
     await expect(answer.getByRole("link", { name: SOURCE.title })).toHaveAttribute("href", SOURCE.url);
     expect(gateway.asked.at(-1)!.body.system).toEqual(expect.stringContaining("You can search the web"));
+  });
+
+  test("someone asks @ember about something written in the room before, which it searches the room for, and answers with what it found", async ({ page, request }) => {
+    await setUpAssistant(request);
+    // In a room of the test's own, which everyone is in: the messages it writes would move general's first ones off its page.
+    const headers = await asAdministrator(request);
+    const created = await request.post("/api/rooms", { data: { kind: "open", name: `Offsite ${crypto.randomUUID().slice(0, 8)}` }, headers });
+    expect(created.status(), await created.text()).toBe(201);
+    const { room } = (await created.json()) as { room: { id: string; name: string } };
+    await useOwnAddress(page);
+    await page.goto(`/rooms/${room.id}`);
+    await signInAsAdministrator(page);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(room.name);
+
+    const word = `lisbon${crypto.randomUUID().slice(0, 8)}`;
+    const composer = editorField(page, "Write a message");
+    await composer.pressSequentially(`The offsite is in ${word}`);
+    await composer.press("Enter");
+    await expect(page.getByRole("article").filter({ hasText: word })).toBeVisible();
+    // The search index takes a message a moment after its room does.
+    await expect.poll(async () => ((await (await request.get(`/api/searches?q=${word}`, { headers })).json()) as { matches: unknown[] }).matches.length).toBe(1);
+    // The room moves on until that's no longer among the messages @ember reads with a question, which its search leaves out.
+    for (let n = 1; n < ROOM_MESSAGES_READ; n++) {
+      await composer.pressSequentially(`Onwards ${n}`);
+      await composer.press("Enter");
+    }
+    await expect(page.getByRole("article").filter({ hasText: `Onwards ${ROOM_MESSAGES_READ - 1}` })).toBeVisible();
+
+    await composer.pressSequentially("@Embe");
+    await expect(page.getByRole("listbox").getByRole("option")).toHaveText(["Ember Agent"]);
+    await composer.press("Tab");
+    await composer.pressSequentially(`${RECALL_QUESTION} ${word}`);
+    await composer.press("Enter");
+
+    // Its answer is what its model said once Ember had run the search it called for.
+    const answer = page.getByRole("article").filter({ hasText: RECALLED });
+    await expect(answer).toContainText(`Ada Lovelace: The offsite is in ${word}`);
+    await expect(answer).not.toContainText("I'll look.");
+    await expect(answer.getByRole("heading", { level: 3 })).toHaveText(/^Ember Agent/);
+    // Its model was asked twice: with the tool, and again with its call and what the search found.
+    const [called, answered] = gateway.asked.slice(-2).map(({ body }) => body as { tools: Array<{ name: string }>; messages: Array<{ role: string; content: unknown }> });
+    expect(called!.tools.map(({ name }) => name)).toEqual(["search_messages"]);
+    expect(answered!.messages.slice(called!.messages.length)).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "I'll look." }, { type: "tool_use", id: "toolu_e2e", name: "search_messages", input: { words: word } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_e2e", content: expect.stringContaining(`Ada Lovelace: The offsite is in ${word}`) }] },
+    ]);
   });
 
   test("someone picks how much @ember thinks and writes for them on their profile, up to the most the administrator allows, and it asks its model so", async ({
