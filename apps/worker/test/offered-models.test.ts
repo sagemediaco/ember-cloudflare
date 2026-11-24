@@ -501,10 +501,10 @@ describe("Workers AI's models", () => {
   const searchingModel = (sent: Sent) => {
     const messages = (sent.body?.messages ?? []) as Array<{ role: string }>;
     if (!sent.body?.tools) return answering("Hello, team!")(sent);
-    return messages.at(-1)?.role === "tool" ? answering("AI Gateway is Cloudflare's proxy for AI models.")(sent) : calling("AI Gateway");
+    return messages.at(-1)?.role === "tool" ? answering("AI Gateway is Cloudflare's proxy for AI models [1, 2].")(sent) : calling("AI Gateway");
   };
 
-  it("search the web with Ember's tool, which Ember runs with Cloudflare's Web Search API, listing the pages found under the answer", async () => {
+  it("search the web with Ember's tool, which Ember runs with Cloudflare's Web Search API, listing the pages they cite of those found under the answer", async () => {
     const ada = await setUpWithAssistant({ ...SETUP, model: GLM.id });
     let requests = cloudflare({ model: searchingModel });
     const turned = await turnWebSearch(ada, true);
@@ -525,7 +525,11 @@ describe("Workers AI's models", () => {
     const messages = toldFound!.body!.messages as Array<Record<string, unknown>>;
     expect(messages.slice(-2)).toEqual([
       { role: "assistant", content: "", tool_calls: [{ id: "call_0", type: "function", function: { name: "web_search", arguments: JSON.stringify({ query: "AI Gateway" }) } }] },
-      { role: "tool", tool_call_id: "call_0", content: `1. ${DOCS.title}\n${DOCS.url}\n${DOCS.description}\n\n2. ${BLOG.title}\n${BLOG.url}\n${BLOG.description}` },
+      {
+        role: "tool",
+        tool_call_id: "call_0",
+        content: `[1] ${DOCS.title}\n${DOCS.url}\n${DOCS.description}\n\n[2] ${BLOG.title}\n${BLOG.url}\n${BLOG.description}\n\nCite a page you use by its number in brackets, such as [1], after what you take from it.`,
+      },
     ]);
   });
 
@@ -699,7 +703,9 @@ describe("Workers AI's models", () => {
       await post(client, `<p>${mention} hello?</p>`);
       await nextAnswer(client);
       client.close();
-      expect(requests.map(({ body }) => body?.tools)).toEqual([undefined]);
+      // The only tools it's given are those that read the room, which Ember runs.
+      const given = requests.map(({ body }) => (body?.tools as Array<{ type: string; name?: string }> | undefined)?.map(({ type, name }) => [type, name]));
+      expect(given).toEqual([[["function", "search_messages"], ["function", "read_room"], ["function", "read_thread"]]]);
     });
   });
 });
